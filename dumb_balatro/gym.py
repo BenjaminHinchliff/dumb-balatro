@@ -3,7 +3,7 @@ from typing import Any, SupportsFloat
 import gymnasium as gym
 from gymnasium.spaces import Box, Dict, MultiBinary
 
-from dumb_balatro.game import Card, DumbBalatro, Rank, Suit
+from dumb_balatro.game import Card, DumbBalatro, InvalidPlay, Rank, Suit
 
 import torch
 import torch.nn.functional as F
@@ -28,23 +28,19 @@ class DumbBalatroGym(gym.Env):
             }
         )
 
-        self.action_space = Dict(
-            {
-                "cards": Box(
-                    low=0, high=1, shape=(MAX_CARDS_PER_HAND, N_CARDS), dtype=np.int_
-                ),  # 5x52 matrix for card selection
-                "play_or_discard": Box(
-                    low=0, high=1, shape=(MAX_CARDS_PER_HAND,), dtype=np.int_
-                ),  # 5x1 binary vector (1 = play, 0 = discard)
-            }
-        )
+        self.action_space = Box(
+            low=0,
+            high=1,
+            shape=(MAX_CARDS_PER_HAND, N_CARDS + 1),
+            dtype=np.float32,
+        )  # 5x52 matrix for card selection, plus one for whether to play or discard (and yes it's stupid but necessary :/)
 
     # with the extra complexity this brings I'm starting to think it *might* be stupid
     def card_to_int(self, suit: Suit, rank: Rank):
         return list(Suit).index(suit) * len(Rank) + list(Rank).index(rank)
 
     def int_to_card(self, n: int) -> tuple[str, str]:
-        return list(Suit)[n // len(Suit)], list(Rank)[n % len(Rank)]
+        return list(Suit)[n // len(Rank)], list(Rank)[n % len(Rank)]
 
     def hand_to_ints(self, hand: list[Card]) -> list[int]:
         return [self.card_to_int(card.suit, card.rank) for card in hand]
@@ -74,26 +70,16 @@ class DumbBalatroGym(gym.Env):
 
         return observation, info
 
-    def build_choices_from_action(self, actions, hand_encoded):
+    def build_choices_from_action(self, action, hand_encoded):
         card_choices = torch.multinomial(
-            (
-                actions[:, : N_CARDS * MAX_CARDS_PER_HAND]
-                .view(-1, MAX_CARDS_PER_HAND, N_CARDS)
-                .softmax(dim=2)
-                * hand_encoded.unsqueeze(1)
-            ).view(-1, N_CARDS),
+            action.softmax(dim=1) * hand_encoded,
             num_samples=1,
         )
-        card_choices = card_choices.view(-1, MAX_CARDS_PER_HAND)
-        option_choice = actions[:, N_CARDS * MAX_CARDS_PER_HAND :].max(1).indices
-        return torch.cat((card_choices, option_choice.unsqueeze(1)), dim=1)
+        return card_choices
 
     # attempt to generously convert what the model "wants" based on the actual hand
-    def action_to_command(self, tensor) -> tuple[list, bool]:
+    def action_to_command(self, cards) -> list:
         hand = self.balatro.hand
-        action = tensor
-        cards = action[:-1]
-        option = action[-1]
         selection = set()
         for card in cards:
             suit, rank = self.int_to_card(int(card.item()))
@@ -101,23 +87,25 @@ class DumbBalatroGym(gym.Env):
                 hand_index = next(
                     (i for i, c in enumerate(hand) if c.suit == suit and c.rank == rank)
                 )
-                # lua indexes start at 1 (guess how I found out)
-                selection.add(hand_index + 1)
+                selection.add(hand_index)
             except StopIteration:
                 pass
 
-        return (list(selection), option)
+        return list(selection)
 
     def step(
-        self, action: object
+        self, action: dict
     ) -> tuple[object, SupportsFloat, bool, bool, dict[str, Any]]:
-        super().step(action)
-        action = torch.from_numpy(action)
+        cards = torch.from_numpy(action[:, :-1])
+        play_or_discard = action[0, -1] > 0.5
 
-        choices = self.build_choices_from_action(action, self._enc_hand())
-        indices, option = self.action_to_command(choices)
+        choices = self.build_choices_from_action(cards, self._enc_hand())
+        indices = self.action_to_command(choices)
 
-        reward = self.balatro.play(indices, discard=option) or 0
+        try:
+            reward = self.balatro.play(indices, discard=play_or_discard) or 0
+        except InvalidPlay as e:
+            reward = -1
         observation = self._get_obs()
         terminated = self.balatro.is_ended()
         truncated = False
