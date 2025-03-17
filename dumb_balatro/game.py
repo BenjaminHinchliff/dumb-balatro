@@ -1,9 +1,8 @@
-from ast import In
-import random
+from random import Random
 from enum import StrEnum, auto
 from dataclasses import dataclass
 from collections import Counter, defaultdict
-from typing import Any, NamedTuple
+from typing import NamedTuple
 
 HAND_SIZE = 8
 MAX_CARDS = 5
@@ -241,18 +240,20 @@ class InvalidPlay(Exception):
 
 
 class DumbBalatro:
+    random: Random
     deck: list[Card]
     current_deck: list[Card]
     hand: list[Card]
     hands: int
     discards: int
 
-    def __init__(self) -> None:
+    def __init__(self, seed: int | None = None) -> None:
         self.deck = [Card(suit, rank) for suit in Suit for rank in Rank]
         self.hand = []
-        self.reset()
+        self.reset(seed)
 
-    def reset(self) -> None:
+    def reset(self, seed: int | None = None) -> None:
+        self.random = Random(seed)
         self.hands = START_HANDS
         self.discards = START_DISCARDS
         self.shuffle_deck()
@@ -260,7 +261,7 @@ class DumbBalatro:
 
     def shuffle_deck(self) -> None:
         self.current_deck = self.deck.copy()
-        random.shuffle(self.current_deck)
+        self.random.shuffle(self.current_deck)
 
     def draw(self) -> list[Card]:
         for _ in range(min(HAND_SIZE - len(self.hand), len(self.deck))):
@@ -297,14 +298,14 @@ class DumbBalatro:
         self.draw()
         if discard:
             self.discards -= 1
+            return None
         else:
             self.hands -= 1
             return self.score(cards)
 
 
 if __name__ == "__main__":
-    random.seed(1234)
-    balatro = DumbBalatro()
+    balatro = DumbBalatro(seed=1234)
     while not balatro.is_ended():
         print(balatro.hand)
         print(f"indx: {' '.join(str(x) for x in range(len(balatro.hand)))}")

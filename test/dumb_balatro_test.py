@@ -1,4 +1,3 @@
-import random
 import sys
 import os
 
@@ -116,8 +115,7 @@ class TestDumbBalatro(unittest.TestCase):
         self.assertEqual(hand.indices, [0])
 
     def test_game(self):
-        random.seed(1234)
-        balatro = DumbBalatro()
+        balatro = DumbBalatro(seed=1234)
         self.assertEqual(balatro.play([0, 2, 4, 5, 7], discard=True), None)
         self.assertEqual(balatro.discards, 3)
         self.assertEqual(balatro.play([3, 4, 5, 7]), 15)
